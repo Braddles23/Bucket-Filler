@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bucket Filler - Calendar Edition</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary: #3498db; --danger: #e74c3c; --success: #2ecc71;
+            --dark: #2c3e50; --light: #ecf0f1; --gold: #f1c40f;
+        }
+        body { font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; padding: 20px; background: #f0f2f5; }
+        #app { background: white; padding: 25px; border-radius: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.1); width: 100%; max-width: 450px; text-align: center; }
+
+        .header-controls { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+        .view-nav { display: flex; gap: 4px; flex-wrap: wrap; }
+        .view-nav button { background: none; border: 1.5px solid var(--light); padding: 6px 10px; border-radius: 15px; cursor: pointer; font-weight: bold; font-size: 0.75rem; }
+        .view-nav button.active { background: var(--dark); color: white; border-color: var(--dark); }
+
+        /* Bucket Styles */
+        .bucket-frame { display: flex; justify-content: center; margin: 20px 0; }
+        .bucket { width: 130px; height: 180px; border: 5px solid var(--dark); border-top: none; border-radius: 0 0 20px 20px; position: relative; overflow: hidden; background: var(--light); }
+        .water { position: absolute; bottom: 0; width: 100%; height: 0%; background: linear-gradient(to top, #2980b9, #3498db); transition: height 0.5s; }
+        #timer { font-size: 2.2rem; font-family: monospace; margin: 10px 0; font-weight: bold; }
+        .main-btn { padding: 12px; font-size: 1rem; cursor: pointer; border-radius: 10px; border: none; width: 100%; font-weight: bold; }
+
+        /* Calendar Styles */
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin-top: 15px; }
+        .cal-day { aspect-ratio: 1; border-radius: 4px; font-size: 0.7rem; display: flex; align-items: center; justify-content: center; background: #eee; position: relative; }
+        .cal-header { font-weight: bold; font-size: 0.8rem; color: #888; margin-bottom: 5px; }
+        .level-0 { background: #ebedf0; }
+        .level-1 { background: #9be9a8; } /* 1-2 hours */
+        .level-2 { background: #40c463; color: white; } /* 2-4 hours */
+        .level-3 { background: #216e39; color: white; } /* 4+ hours */
+
+        .edit-row { display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div class="header-controls">
+        <div class="view-nav">
+            <button id="nav-main" class="active" onclick="showView('main')">Study</button>
+            <button id="nav-stats" onclick="showView('stats')">Stats</button>
+            <button id="nav-cal" onclick="showView('cal')">Calendar</button>
+            <button id="nav-edit" onclick="showView('edit')">Settings</button>
+        </div>
+        <button id="mute-btn" onclick="toggleMute()" style="border:none; background:none; cursor:pointer; font-size:1.2rem;">🔊</button>
+    </div>
+
+    <div id="main-view">
+        <nav id="bucket-tabs" style="display:flex; gap:5px; justify-content:center; margin-bottom:15px;"></nav>
+        <h2 id="unit-title" style="margin:5px;">Select Unit</h2>
+        <div class="bucket-frame"><div class="bucket"><div id="water" class="water"></div></div></div>
+        <div id="timer">00:00:00</div>
+        <button id="tap-btn" class="main-btn" style="background:var(--success); color:white;" onclick="toggleTap()">Turn on Tap</button>
+    </div>
+
+    <div id="cal-view" style="display:none;">
+        <h3>Activity Heatmap</h3>
+        <p id="month-label" style="font-weight:bold; margin-bottom:10px;"></p>
+        <div class="calendar-grid">
+            <div class="cal-header">S</div><div class="cal-header">M</div><div class="cal-header">T</div>
+            <div class="cal-header">W</div><div class="cal-header">T</div><div class="cal-header">F</div><div class="cal-header">S</div>
+        </div>
+        <div id="calendar-days" class="calendar-grid" style="margin-top:0;"></div>
+        <div style="display:flex; justify-content:center; gap:10px; margin-top:15px; font-size:0.7rem;">
+            <span>Less</span>
+            <div style="width:12px; height:12px; background:#ebedf0;"></div>
+            <div style="width:12px; height:12px; background:#9be9a8;"></div>
+            <div style="width:12px; height:12px; background:#40c463;"></div>
+            <div style="width:12px; height:12px; background:#216e39;"></div>
+            <span>More</span>
+        </div>
+    </div>
+
+    <div id="stats-view" style="display:none;">
+        <h3>Time Spreading</h3>
+        <canvas id="distChart" style="max-height:200px;"></canvas>
+        <div id="total-summary" style="margin-top:15px; font-weight:bold;"></div>
+    </div>
+
+    <div id="edit-view" style="display:none;">
+        <h3>Settings</h3>
+        <div id="edit-list"></div>
+        <button class="main-btn" style="background:var(--dark); color:white; margin-top:10px;" onclick="addUnit()">+ Add Unit</button>
+    </div>
+</div>
+
+<script>
+    let units = JSON.parse(localStorage.getItem('buckets_v3')) || [{ name: 'Maths', elapsed: 0, goal: 36000 }];
+    let dailyLog = JSON.parse(localStorage.getItem('buckets_history')) || {};
+    let isMuted = JSON.parse(localStorage.getItem('buckets_muted')) || false;
+    let activeIndex = 0, isRunning = false, timerInterval, chartInstance = null;
+    const victorySound = new Audio('Yay_SE.mp3');
+
+    function getTodayKey() { return new Date().toISOString().split('T')[0]; }
+
+    function showView(viewName) {
+        if (isRunning) toggleTap();
+        ['main', 'stats', 'cal', 'edit'].forEach(v => {
+            document.getElementById(v + '-view').style.display = v === viewName ? 'block' : 'none';
+            document.getElementById('nav-' + v).classList.toggle('active', v === viewName);
+        });
+        if (viewName === 'stats') renderStats();
+        if (viewName === 'cal') renderCalendar();
+        if (viewName === 'edit') renderEditList();
+        updateUI();
+    }
+
+    function updateUI() {
+        if (units.length === 0) return;
+        const current = units[activeIndex];
+        const percent = (current.elapsed / current.goal) * 100;
+        document.getElementById('water').style.height = Math.min(percent, 100) + '%';
+        document.getElementById('unit-title').innerText = current.name;
+        
+        const h = Math.floor(current.elapsed / 3600).toString().padStart(2, '0');
+        const m = Math.floor((current.elapsed % 3600) / 60).toString().padStart(2, '0');
+        const s = (current.elapsed % 60).toString().padStart(2, '0');
+        document.getElementById('timer').innerText = `${h}:${m}:${s}`;
+        
+        renderTabs();
+        localStorage.setItem('buckets_v3', JSON.stringify(units));
+        localStorage.setItem('buckets_history', JSON.stringify(dailyLog));
+    }
+
+    function toggleTap() {
+        const btn = document.getElementById('tap-btn');
+        if (!isRunning) {
+            isRunning = true; btn.innerText = "Stop Tap"; btn.style.background = "var(--danger)";
+            timerInterval = setInterval(() => {
+                units[activeIndex].elapsed++;
+                // LOG TO CALENDAR
+                const today = getTodayKey();
+                dailyLog[today] = (dailyLog[today] || 0) + 1;
+                
+                if (units[activeIndex].elapsed >= units[activeIndex].goal) {
+                    if (!isMuted) victorySound.play();
+                    toggleTap();
+                }
+                updateUI();
+            }, 1000);
+        } else {
+            isRunning = false; btn.innerText = "Turn on Tap"; btn.style.background = "var(--success)";
+            clearInterval(timerInterval);
+        }
+    }
+
+    function renderCalendar() {
+        const container = document.getElementById('calendar-days');
+        const label = document.getElementById('month-label');
+        container.innerHTML = '';
+        const now = new Date();
+        label.innerText = now.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).getDay();
+        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+
+        for (let i = 0; i < firstDay; i++) container.appendChild(document.createElement('div'));
+
+        for (let d = 1; d <= daysInMonth; d++) {
+            const dateStr = `${now.getFullYear()}-${(now.getMonth()+1).toString().padStart(2,'0')}-${d.toString().padStart(2,'0')}`;
+            const seconds = dailyLog[dateStr] || 0;
+            const hours = seconds / 3600;
+            
+            const dayEl = document.createElement('div');
+            dayEl.className = 'cal-day';
+            dayEl.innerText = d;
+            
+            let level = 'level-0';
+            if (hours > 0.1) level = 'level-1';
+            if (hours > 2) level = 'level-2';
+            if (hours > 4) level = 'level-3';
+            dayEl.classList.add(level);
+            dayEl.title = `${hours.toFixed(1)} hours studied`;
+            container.appendChild(dayEl);
+        }
+    }
+
+    function renderStats() {
+        const ctx = document.getElementById('distChart').getContext('2d');
+        const total = units.reduce((a, b) => a + b.elapsed, 0);
+        document.getElementById('total-summary').innerText = `Total: ${(total/3600).toFixed(1)}h`;
+        if (chartInstance) chartInstance.destroy();
+        chartInstance = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: units.map(u => u.name),
+                datasets: [{ data: units.map(u => u.elapsed), backgroundColor: ['#3498db', '#e74c3c', '#2ecc71', '#f1c40f'] }]
+            }
+        });
+    }
+
+    function renderTabs() {
+        const container = document.getElementById('bucket-tabs'); container.innerHTML = '';
+        units.forEach((u, i) => {
+            const b = document.createElement('button'); b.innerText = u.name;
+            if(i === activeIndex) b.className = 'active';
+            b.onclick = () => { if(isRunning) toggleTap(); activeIndex = i; updateUI(); };
+            container.appendChild(b);
+        });
+    }
+
+    function renderEditList() {
+        const container = document.getElementById('edit-list'); container.innerHTML = '';
+        units.forEach((u, i) => {
+            const row = document.createElement('div'); row.className = 'edit-row';
+            row.innerHTML = `<input type="text" value="${u.name}" onchange="units[${i}].name=this.value; updateUI();" style="width:80px;">
+                <input type="number" value="${(u.goal/3600)}" onchange="units[${i}].goal=this.value*3600; updateUI();" style="width:40px;"> hrs
+                <button onclick="units[${i}].elapsed=0; updateUI(); renderEditList();">🔄</button>
+                <button onclick="units.splice(${i},1); activeIndex=0; updateUI(); renderEditList();" style="color:red">×</button>`;
+            container.appendChild(row);
+        });
+    }
+
+    function addUnit() { units.push({ name: 'New', elapsed: 0, goal: 36000 }); renderEditList(); }
+    function toggleMute() { isMuted = !isMuted; localStorage.setItem('buckets_muted', isMuted); document.getElementById('mute-btn').innerText = isMuted ? '🔇' : '🔊'; }
+    
+    document.getElementById('mute-btn').innerText = isMuted ? '🔇' : '🔊';
+    updateUI();
+</script>
+</body>
+</html>
